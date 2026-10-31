@@ -1,3 +1,328 @@
 # autonomy-gate
 
-Decide when an LLM agent has earned the right to act on its own. Work in progress.
+Decide when an LLM agent has earned the right to act on its own.
+
+You give it decisions people already made and an agent (any Python callable). It:
+
+1. **Replays** those decisions through the agent and a plain logistic-regression baseline,
+   with the decision time in every request, and picks a confidence threshold from the
+   labels.
+2. **Re-tests** that frozen threshold once, on newer decisions it has never seen, and
+   refuses to re-test on anything it was tuned on.
+3. Runs the agent in **shadow** on live requests (it logs, it can't send) until the
+   **go-live check** passes written bars, and names every bar that fails until then.
+4. Lets it **act** through one guarded path: a kill switch read before every send, a cap,
+   and a write-ahead ledger that settles a lost answer by looking it up, never by sending
+   again.
+
+Python 3.11+, no runtime dependencies, MIT. Everything in this repository runs on
+synthetic data with a stand-in model, so it needs no API key.
+
+## Why it exists
+
+In October 2026 I had to decide whether the GPT-5.5 lead agent I built for my hauling
+business could act without me. Its first replay, on 200 of my own labeled decisions, scored
+0.86 precision but caught only 54% of the leads I'd have taken. Two causes: the request
+carried no clock, so the model judged "today's sale" against its own idea of today, and its
+rubric was narrower than I am. Before anything was allowed to act, I wrote the bars down: a
+held-out re-test, a week of shadow, a Wilson lower bound on precision, provenance so the
+agent's own approvals never became labels, and a kill switch. This package is that gate,
+rebuilt on synthetic data. None of my business's data is in it.
+
+— Jacob Lopez
+
+## What it checks that a single score won't
+
+- **The clock.** Every record carries `decidedAt`, and every request the agent sees
+  includes it. `autonomy-gate lint` fails a file whose records have no clock, or whose
+  request snapshot was captured after the decision (`capturedAt > decidedAt`: facts from
+  the future). At runtime, a rail holds any approval whose request has no clock.
+- **Precision alone lies.** 9 right out of 10 is 0.90, but its Wilson 95% lower bound is
+  0.60. The bars ask for both: precision ≥ 0.90 *and* a lower bound ≥ 0.85, at least 40
+  overlaps with a person including 25 approvals, and a recall floor you choose.
+- **The agent's own decisions poison the labels.** Every decision says who made it
+  (`decidedBy: human | agent`). Every path that turns decisions into labels or agreement
+  numbers refuses agent-made ones; `autonomy-gate labels` filters a raw export. Labels a
+  person made from facts the agent couldn't know (`basis: operational`, such as a full
+  schedule) are reported apart from content judgments.
+- **"Success" is a claim, not a fact.** A send counts as sent only with a receipt from the
+  sender, or a receipt found by looking its request id up. An answer lost to a crash or a
+  timeout ends `unconfirmed_never_resubmitted` and is never sent again.
+
+## Two-minute demo
+
+From a clone (it isn't on PyPI yet):
+
+```sh
+pip install -e ".[dev]"
+```
+
+The examples are pickup requests for a hauling business, made by
+`autonomy-gate synth examples`. About a third of them are same-day ("Moving out today, need
+a couch gone before 5pm"). The "person" who decided them is a formula, and the agent is
+`autonomy_gate.synthetic:candidate`, a keyword-and-noise stand-in for a model. Its numbers
+say nothing about any real model.
+
+**1. Strip the clock, and recall collapses on the same-day requests.**
+
+```text
+$ autonomy-gate replay examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --bars examples/gate.yaml --strip-clock
+500 human decisions, 334 approvals. CLOCK STRIPPED: no decidedAt.
+as asked  the model's own answers, no threshold: approves 234, right 216: precision 0.923 [0.882, 0.951]; catches 216 of 334: recall 0.647 [0.594, 0.696]
+candidate threshold 0.5982: ... misses: recall 0.647 < 0.70
+
+By the agent's reason:
+  reason                n  approve  hold  skip  person approved
+  expired             138        0     0   138              108
+```
+
+Precision still looks fine. The stand-in, with no date to go on, calls 138 same-day
+requests expired, and the person had approved 108 of them. Put the clock back:
+
+```text
+$ autonomy-gate replay examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --bars examples/gate.yaml
+500 human decisions, 334 approvals. Requests carried decidedAt.
+candidate threshold 0.5982: approves 343, right 322: precision 0.939 [0.908, 0.960]; catches 322 of 334: recall 0.964 [0.938, 0.979]
+          clears the bars
+```
+
+**2. Beat the baseline, lock the threshold, re-test once on newer decisions.**
+
+```text
+$ autonomy-gate replay examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --bars examples/gate.yaml --baseline --lock gate.lock
+Baseline fitted on the oldest 250 decisions; replaying the newer 250.
+Baseline held to the candidate's precision (0.937):
+  threshold 0.8841: approves 48, right 45: precision 0.938 [0.832, 0.979]; catches 45 of 167: recall 0.269 [0.208, 0.341]
+  approvals only the candidate caught: 119; only the baseline: 1; exact McNemar p = 1.82e-34
+Locked threshold 0.5982 in gate.lock; the gate has now seen everything through 2026-02-18T14:46:00Z.
+
+$ autonomy-gate retest examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock
+autonomy-gate: refused: refusing to re-test on data the gate has already seen; 500 ids were already used: ...
+
+$ autonomy-gate retest examples/leads_heldout.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock
+Held-out re-test at the frozen threshold 0.5982, 300 new decisions:
+  approves 188, right 177: precision 0.941 [0.898, 0.967]
+  catches 177 of 178: recall 0.994 [0.969, 0.999]
+  PASSED. Recorded in gate.lock; this lock takes no other held-out set.
+```
+
+The re-test also refuses a request it has seen under a new id, and anything decided
+before the newest decision the lock has seen. A second re-test on the same lock is refused:
+change the prompt and you tune a new lock (`replay --previous-lock`) and re-test on newer
+decisions.
+
+**3. Shadow until the check goes GREEN.** One day of shadow:
+
+```text
+$ autonomy-gate shadow examples/leads_live.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock --log shadow.jsonl --until 2026-03-01T12:00:00Z
+Shadowed 27 requests into shadow.jsonl (approve 19, skip 8). Nothing was sent.
+
+$ autonomy-gate check --shadow shadow.jsonl --labels examples/leads_live_labels.jsonl --lock gate.lock
+RED: 4 of 10 bars fail.
+  FAIL  days of shadow                            0.9                 need >= 7
+  FAIL  overlaps with a person                    15                  need >= 40
+  FAIL  person approvals in overlaps              13                  need >= 25
+  ok    precision                                 13/13 = 1.000       need >= 0.90
+  FAIL  Wilson 95% lower bound                    0.772               need >= 0.85
+  ...
+```
+
+Thirteen right out of thirteen is not enough evidence. After the rest of the period:
+
+```text
+$ autonomy-gate shadow examples/leads_live.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock --log shadow.jsonl
+$ autonomy-gate check --shadow shadow.jsonl --labels examples/leads_live_labels.jsonl --lock gate.lock
+GREEN: every bar passes.
+  ok    days of shadow                            10.8                need >= 7
+  ok    overlaps with a person                    174                 need >= 40
+  ok    precision                                 101/105 = 0.962     need >= 0.90
+  ok    Wilson 95% lower bound                    0.906               need >= 0.85
+  ...
+Skips: earned (60/62 = 0.968 on skip overlaps); they may close requests.
+```
+
+`check --lock` writes the result into the lock. The runtime acts only on a lock whose
+re-test passed and whose latest check is GREEN, for the same candidate fingerprint.
+
+**4. Act behind the kill switch, and crash mid-send.**
+
+```text
+$ R="examples/leads_live.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock --ledger ledger.db --switch switch.txt --live --outbox outbox.jsonl"
+$ autonomy-gate run $R --batch 3
+  lead-00799  held                            kill_switch: switch.txt is missing
+$ autonomy-gate switch switch.txt on
+$ autonomy-gate run $R --batch 8 --cap 2
+  lead-00798  sent                            receipt
+  lead-00802  sent                            receipt
+  lead-00805  would_approve                   cap_reached
+  lead-00803  skipped                         not_a_job
+$ autonomy-gate switch switch.txt off
+$ autonomy-gate run $R --batch 3
+  lead-00804  held                            kill_switch: switch.txt says 'stop'
+$ autonomy-gate switch switch.txt on
+$ autonomy-gate run $R --batch 5 --demo-crash before_write     # the process dies inside send()
+$ autonomy-gate run $R --batch 1
+  lead-00830  unconfirmed_never_resubmitted   found in sending at start
+```
+
+Deferred approvals (`would_approve`) go out on a later cycle from the stored verdict,
+without asking the model again. `--demo-crash after_write` shows the other case: the send
+happened, so the lookup finds its receipt and the item ends `sent`, still exactly once.
+
+**5. Put one agent decision into a label file.** Change any line of
+`examples/leads_history.jsonl` to `"decidedBy": "agent"` and run `pytest`:
+`tests/test_provenance.py` fails, and so do `autonomy-gate lint` and every command that
+reads labels.
+
+## Data
+
+One JSON object per line (wrapped here to read):
+
+```json
+{"id": "lead-00012",
+ "decidedAt": "2026-03-04T15:20:00Z",
+ "capturedAt": "2026-03-04T15:20:00Z",
+ "request": {"text": "Moving out today, need a couch gone before 5pm.",
+             "postedAt": "2026-03-04T13:05:00Z",
+             "features": {"distance_miles": 4.2, "has_photo": true, "items": 3, "replies": 1}},
+ "decision": {"action": "approve", "decidedBy": "human", "basis": "content"}}
+```
+
+`request` is yours: whatever the agent should see. The baseline reads the numeric and
+boolean `features`. Live requests for `shadow` and `run` have no `decision`.
+
+## Your agent
+
+Any callable from a request dict to a verdict:
+
+```python
+def my_agent(request: dict) -> dict:
+    # request: {"id", "decidedAt", ...everything in your record's "request"}
+    return {"action": "approve", "reason": "same_day_job", "confidence": 0.93}
+
+my_agent.fingerprint = "my-agent prompt v3"  # optional; changes invalidate the lock
+```
+
+`approve` acts, `hold` leaves it for a person, `skip` closes it. Pass it as
+`--candidate mypackage.agent:my_agent` (or `path/to/file.py:my_agent`). An exception, a
+timeout (`--timeout`) or anything that isn't a valid verdict becomes a hold.
+
+### OpenAI Responses API (optional)
+
+With `OPENAI_API_KEY` and `AUTONOMY_GATE_OPENAI_MODEL` set in your environment:
+
+```sh
+pip install -e ".[openai]"
+autonomy-gate replay labels.jsonl --candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent
+```
+
+It asks for a strict JSON-schema verdict with Structured Outputs (`text.format`,
+`strict: true`) and `store: false`, and treats a refusal or an `incomplete` response as an
+error, so the gate holds. Your own instructions can go in the file named by
+`AUTONOMY_GATE_INSTRUCTIONS_FILE`. It follows OpenAI's
+[Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs)
+and the [Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create),
+both read on 2026-10-31. The tests drive it with a fake client; this repository has not
+run it against the live API.
+
+## The runtime in your code
+
+```python
+from autonomy_gate import FileKillSwitch, GateLock, Guard, Ledger
+
+class MySender:
+    def send(self, request_id, payload):   # use request_id as the idempotency key
+        ...                                # return a receipt id, or raise
+    def lookup(self, request_id):          # the receipt if it happened, else None
+        ...
+
+guard = Guard(my_agent, Ledger("ledger.db"), FileKillSwitch("switch.txt"),
+              GateLock.load("gate.lock"), fingerprint=..., sender=MySender(),
+              max_sends_per_cycle=20)
+guard.cycle(new_records)   # call once per cycle
+```
+
+Leave `sender` out and nothing can be sent: approvals are held (`live_off`). Rails are
+functions `(request, verdict) -> verdict | None`; the most cautious verdict wins and a rail
+can never turn a hold or a skip into an approval. `autonomy_gate.isolation.assert_isolated`
+walks a module's imports and fails if it can reach network or send code; this repository
+uses it to prove the policy and shadow modules can't reach the actuator, and you can use it
+on your own policy module.
+
+| Ledger state | Meaning |
+| --- | --- |
+| `held` | A person decides (hold, model error, below threshold, a rail, live off, switch off). |
+| `advisory_skip` | The agent would close it, but skips haven't earned that yet. |
+| `skipped` | Closed without acting, once skips cleared their own bar. |
+| `would_approve` | Approved but over the cap; sent later without a second model call. |
+| `sending` | Intent committed before the sender is called. |
+| `sent` | A receipt from the sender or from a lookup. |
+| `unconfirmed_never_resubmitted` | The answer was lost and the lookup couldn't confirm it. Never resent. |
+
+## The bars
+
+`examples/gate.yaml` (`name: number` lines only; anything else is an error):
+
+| Bar | Default | |
+| --- | --- | --- |
+| `min_shadow_days` | 7 | span of `decidedAt` in the shadow log |
+| `min_overlaps` | 40 | shadowed requests a person also decided |
+| `min_overlap_approvals` | 25 | of those, ones the person approved |
+| `min_precision` | 0.90 | of the agent's approvals, share the person approved |
+| `min_precision_lower_bound` | 0.85 | Wilson lower bound of that share, at `confidence` |
+| `min_recall` | 0.0 (0.70 in the example) | of the person's approvals, share the agent caught |
+| `max_p95_latency_s` | 60 | 95th percentile of the time each model call took |
+| `max_unavailable` | 0.05 | share of model calls that failed or timed out |
+| `skip_min_precision`, `skip_min_overlaps` | 0.80, 50 | before a skip may close a request |
+| `confidence` | 0.95 | for every interval |
+
+The defaults are the bars the author wrote for his own agent, except `min_recall`, which is
+yours to choose.
+
+## Measuring your own agent
+
+The synthetic numbers above measure nothing real. To get real ones:
+
+- **Replay**: export decisions people made, with the time each was made and the request as
+  it looked then (`capturedAt` no later than `decidedAt`). Run `lint`, then `replay
+  --baseline`. Freeze the prompt (its fingerprint goes in the lock) before you label the
+  held-out set.
+- **Held-out**: label newer decisions without looking at the model's calls, then `retest`
+  once. Report whole counts with the intervals, as the tool prints them.
+- **Latency and availability**: the shadow log times each model call from the caller's side
+  (`latency_s`) and records every failure (`error`). That is what the p95 and unavailable
+  bars read, so run shadow on the same model, region and timeout you'll use live.
+- **Live**: count outcomes from the ledger, not from your job's own success messages.
+
+## What was tested
+
+- `pytest`: 79 tests in `tests/`, all passing locally on Python 3.11 and 3.13. The CI
+  workflow runs them on 3.11, 3.12 and 3.13. They cover the Wilson
+  interval against known values, threshold choice, the clock and leakage lint, provenance
+  on every label path (including the committed example files), the clock-stripped replay,
+  the baseline comparison, held-out reuse refusal by id, by content and by time, shadow
+  isolation (no sender parameter, no socket opened, imports walked), the go-live bars,
+  kill switch, cap, skips, a sender that raises or returns no receipt, a real process
+  killed with `os._exit` inside `send()` before and after the write, the OpenAI request
+  shape against a fake client, and the CLI demo end to end.
+- `ruff check` and `ruff format --check`: clean.
+- Scanned every tracked file, and every file in every commit, with `detect-secrets` 1.5.0: no findings.
+
+Not tested: a real model, a real sender over the network, or several runners sharing one
+ledger (run one runner per ledger).
+
+## Limits
+
+- The stand-in model shares its formula with the synthetic person, so its scores are
+  optimistic by construction. Even so, the bars are tight: of seeds 1 to 8, five pass
+  every step of the demo and three fail the shadow check. The examples use seed 3.
+- The isolation check reads source. It follows imports inside your package, including ones
+  inside functions, and judges everything else by name. It doesn't see `importlib` or
+  `__import__` calls.
+- A timed-out model call keeps running in a background thread; its answer is ignored.
+- `ledger.db` is SQLite with `synchronous=FULL`. A send and its ledger row can't be one
+  transaction, which is why a lost answer is settled by lookup.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
