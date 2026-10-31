@@ -58,7 +58,7 @@ pip install -e ".[dev]"
 ```
 
 The examples are pickup requests for a hauling business, made by
-`autonomy-gate synth examples`. About a third of them are same-day ("Moving out today, need
+`autonomy-gate synth examples`. About a quarter of them are same-day ("Moving out today, need
 a couch gone before 5pm"). The "person" who decided them is a formula, and the agent is
 `autonomy_gate.synthetic:candidate`, a keyword-and-noise stand-in for a model. Its numbers
 say nothing about any real model.
@@ -150,24 +150,32 @@ re-test passed and whose latest check is GREEN, for the same candidate fingerpri
 $ R="examples/leads_live.jsonl --candidate autonomy_gate.synthetic:candidate --lock gate.lock --ledger ledger.db --switch switch.txt --live --outbox outbox.jsonl"
 $ autonomy-gate run $R --batch 3
   lead-00799  held                            kill_switch: switch.txt is missing
+  ...
 $ autonomy-gate switch switch.txt on
 $ autonomy-gate run $R --batch 8 --cap 2
   lead-00798  sent                            receipt
   lead-00802  sent                            receipt
   lead-00805  would_approve                   cap_reached
   lead-00803  skipped                         not_a_job
+  ...
+Ledger: held 3, sent 2, skipped 2, would_approve 4
 $ autonomy-gate switch switch.txt off
 $ autonomy-gate run $R --batch 3
-  lead-00804  held                            kill_switch: switch.txt says 'stop'
+  lead-00805  held                            kill_switch: switch.txt says 'stop'
+  ...
+Ledger: held 10, sent 2, skipped 2
 $ autonomy-gate switch switch.txt on
 $ autonomy-gate run $R --batch 5 --demo-crash before_write     # the process dies inside send()
 $ autonomy-gate run $R --batch 1
-  lead-00830  unconfirmed_never_resubmitted   found in sending at start
+  lead-00815  unconfirmed_never_resubmitted   found in sending at start
+  lead-00818  sent                            receipt
 ```
 
 Deferred approvals (`would_approve`) go out on a later cycle from the stored verdict,
-without asking the model again. `--demo-crash after_write` shows the other case: the send
-happened, so the lookup finds its receipt and the item ends `sent`, still exactly once.
+without asking the model again, while the switch is on. A cycle that finds the switch off
+hands them to a person instead: above, the four waiting approvals end `held` with the three
+new requests. `--demo-crash after_write` shows the other case: the send happened, so the
+lookup finds its receipt and the item ends `sent`, still exactly once.
 
 **5. Put one agent decision into a label file.** Change any line of
 `examples/leads_history.jsonl` to `"decidedBy": "agent"` and run `pytest`:
@@ -229,6 +237,7 @@ run it against the live API.
 
 ```python
 from autonomy_gate import FileKillSwitch, GateLock, Guard, Ledger
+from autonomy_gate.cli import agent_fingerprint
 
 class MySender:
     def send(self, request_id, payload):   # use request_id as the idempotency key
@@ -236,18 +245,22 @@ class MySender:
     def lookup(self, request_id):          # the receipt if it happened, else None
         ...
 
+fp = agent_fingerprint(my_agent, "mypackage.agent:my_agent", True)
 guard = Guard(my_agent, Ledger("ledger.db"), FileKillSwitch("switch.txt"),
-              GateLock.load("gate.lock"), fingerprint=..., sender=MySender(),
+              GateLock.load("gate.lock"), fingerprint=fp, sender=MySender(),
               max_sends_per_cycle=20)
 guard.cycle(new_records)   # call once per cycle
 ```
+
+`fp` has to match the fingerprint `replay --lock` stored for the same `--candidate`, or
+`Guard` refuses to go live; `agent_fingerprint` computes it the same way the CLI does.
 
 Leave `sender` out and nothing can be sent: approvals are held (`live_off`). Rails are
 functions `(request, verdict) -> verdict | None`; the most cautious verdict wins and a rail
 can never turn a hold or a skip into an approval. `autonomy_gate.isolation.assert_isolated`
 walks a module's imports and fails if it can reach network or send code; this repository
-uses it to prove the policy and shadow modules can't reach the actuator, and you can use it
-on your own policy module.
+uses it to prove that the policy and shadow modules' own imports can't reach the actuator,
+and you can use it on your own policy module.
 
 | Ledger state | Meaning |
 | --- | --- |
@@ -261,7 +274,7 @@ on your own policy module.
 
 ## The bars
 
-`examples/gate.yaml` (`name: number` lines only; anything else is an error):
+`examples/gate.yaml` (`name: number` lines and `#` comments; anything else is an error):
 
 | Bar | Default | |
 | --- | --- | --- |
@@ -296,8 +309,8 @@ The synthetic numbers above measure nothing real. To get real ones:
 
 ## What was tested
 
-- `pytest`: 79 tests in `tests/`, all passing locally on Python 3.11 and 3.13. The CI
-  workflow runs them on 3.11, 3.12 and 3.13. They cover the Wilson
+- `pytest`: 79 tests in `tests/`, all passing locally on Python 3.11, 3.12 and 3.13. The
+  CI workflow runs them on the same three. They cover the Wilson
   interval against known values, threshold choice, the clock and leakage lint, provenance
   on every label path (including the committed example files), the clock-stripped replay,
   the baseline comparison, held-out reuse refusal by id, by content and by time, shadow
@@ -314,11 +327,15 @@ ledger (run one runner per ledger).
 ## Limits
 
 - The stand-in model shares its formula with the synthetic person, so its scores are
-  optimistic by construction. Even so, the bars are tight: of seeds 1 to 8, five pass
-  every step of the demo and three fail the shadow check. The examples use seed 3.
+  optimistic by construction. Even so, the bars are tight: of seeds 1 to 8, five end the
+  shadow check GREEN and three stay RED on the Wilson lower bound (0.831 to 0.837, against
+  0.85). The examples use seed 3.
 - The isolation check reads source. It follows imports inside your package, including ones
   inside functions, and judges everything else by name. It doesn't see `importlib` or
-  `__import__` calls.
+  `__import__` calls, and it doesn't follow a parent package's `__init__`: this package's
+  `__init__` imports the actuator, so `import autonomy_gate.shadow` loads it, though
+  nothing in shadow refers to it. It finds modules with `importlib.util.find_spec`, which
+  imports their parent packages, so point it only at code you would import anyway.
 - A timed-out model call keeps running in a background thread; its answer is ignored.
 - `ledger.db` is SQLite with `synchronous=FULL`. A send and its ledger row can't be one
   transaction, which is why a lost answer is settled by lookup.

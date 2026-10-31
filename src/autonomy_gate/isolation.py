@@ -5,8 +5,10 @@ that stays inside the same top-level package, and fails if any module on the way
 something on the forbidden list (network, processes, LLM SDKs, or modules you name, such
 as your sender). The error shows the import chain.
 
-It reads source; it does not import anything, so it can't be fooled by a module that
-behaves differently at import time. It follows imports written anywhere in a module,
+It finds imports by parsing source, not by watching what a module does when it runs. It
+locates modules with :func:`importlib.util.find_spec`, though, which imports the parent
+package of each name it looks up, so the packages on the walk do get imported; point it
+only at code you would import anyway. It follows imports written anywhere in a module,
 including inside functions. It does not follow the implicit import of a parent package's
 ``__init__``, and it does not look inside the standard library or third-party packages:
 anything it doesn't follow is judged by its name.

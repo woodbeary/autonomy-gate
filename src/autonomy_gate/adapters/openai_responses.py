@@ -18,8 +18,8 @@ The request follows OpenAI's docs as of October 2026:
 Use it from the command line with
 ``--candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent`` and the
 model in ``AUTONOMY_GATE_OPENAI_MODEL`` (and, optionally, your own instructions in the
-file named by ``AUTONOMY_GATE_INSTRUCTIONS_FILE``). Nothing is stored on OpenAI's side
-by default (``store=False``).
+file named by ``AUTONOMY_GATE_INSTRUCTIONS_FILE``). It sends ``store=False``, so the
+response is not stored for later retrieval through the API.
 """
 
 from __future__ import annotations
