@@ -1,0 +1,13 @@
+# Go-live bars. `name: number` lines only.
+min_shadow_days: 7
+min_overlaps: 40
+min_overlap_approvals: 25
+min_precision: 0.90
+min_precision_lower_bound: 0.85
+# Precision alone can pass an agent that misses half the work. Pick a recall floor.
+min_recall: 0.70
+max_p95_latency_s: 60
+max_unavailable: 0.05
+skip_min_precision: 0.80
+skip_min_overlaps: 50
+confidence: 0.95

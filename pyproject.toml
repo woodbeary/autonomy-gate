@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autonomy-gate"
+dynamic = ["version"]
+description = "Decide when an LLM agent has earned the right to act: a replay with the clock in every request, a held-out re-test, shadow mode with go-live bars, and fail-closed sends behind a kill switch."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Jacob Lopez" }]
+keywords = ["llm", "agents", "shadow mode", "kill switch", "wilson interval", "provenance", "idempotency"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+openai = ["openai>=1.66"]
+dev = ["pytest>=8", "ruff==0.16.9"]
+
+[project.scripts]
+autonomy-gate = "autonomy_gate.cli:main"
+
+[project.urls]
+Repository = "https://github.com/woodbeary/autonomy-gate"
+
+[tool.hatch.version]
+path = "src/autonomy_gate/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autonomy_gate"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S603"]
+"src/autonomy_gate/synthetic.py" = ["S311"]
+"src/autonomy_gate/replay.py" = ["S311"]
