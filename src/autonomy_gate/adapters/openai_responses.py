@@ -16,10 +16,13 @@ The request follows OpenAI's docs as of October 2026:
   https://developers.openai.com/api/reference/resources/responses/methods/create
 
 Use it from the command line with
-``--candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent`` and the
-model in ``AUTONOMY_GATE_OPENAI_MODEL`` (and, optionally, your own instructions in the
-file named by ``AUTONOMY_GATE_INSTRUCTIONS_FILE``). It sends ``store=False``, so the
-response is not stored for later retrieval through the API.
+``--candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent``, the model in
+``AUTONOMY_GATE_OPENAI_MODEL``, optionally the reasoning effort in
+``AUTONOMY_GATE_OPENAI_EFFORT`` and your own instructions in the file named by
+``AUTONOMY_GATE_INSTRUCTIONS_FILE``. It is off by default: it builds a real client only when
+``AUTONOMY_GATE_ALLOW_MODEL_CALLS=1``. It sends ``store=False``, so the response is not
+stored for later retrieval through the API. Every response's token usage is added to
+``agent.usage``.
 """
 
 from __future__ import annotations
@@ -27,45 +30,20 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
 from ..lock import fingerprint
+from ..usage import UsageMeter
+from .common import (
+    DEFAULT_INSTRUCTIONS,
+    VERDICT_SCHEMA,
+    AdapterError,
+    instructions_from_env,
+    require_model_calls,
+    verdict_from_text,
+)
 
-VERDICT_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "action": {
-            "type": "string",
-            "enum": ["approve", "hold", "skip"],
-            "description": "approve: act now; hold: leave it for a person; skip: close it",
-        },
-        "reason": {
-            "type": "string",
-            "description": "a short snake_case reason code, such as same_day_job or expired",
-        },
-        "confidence": {
-            "type": "number",
-            "description": "0 to 1: how likely it is that a person would make the same call",
-        },
-    },
-    "required": ["action", "reason", "confidence"],
-    "additionalProperties": False,
-}
-
-DEFAULT_INSTRUCTIONS = """\
-You decide what happens to one incoming request. Answer with an action:
-- approve: it is worth acting on now;
-- hold: you are unsure, or it needs a person;
-- skip: it is not worth acting on.
-The request includes decidedAt, the moment of this decision. Judge every time-dependent
-phrase ("today", "before 5pm", "this weekend") against decidedAt, never against your own
-idea of the date. Give a short reason code and your confidence that a person would agree.
-"""
-
-
-class AdapterError(RuntimeError):
-    """The API answered with something that isn't a verdict."""
+__all__ = ["DEFAULT_INSTRUCTIONS", "VERDICT_SCHEMA", "AdapterError", "OpenAIResponsesAgent"]
 
 
 class OpenAIResponsesAgent:
@@ -84,10 +62,10 @@ class OpenAIResponsesAgent:
         model = model or os.environ.get("AUTONOMY_GATE_OPENAI_MODEL")
         if not model:
             raise ValueError("pass model= or set AUTONOMY_GATE_OPENAI_MODEL")
-        if instructions is None:
-            path = os.environ.get("AUTONOMY_GATE_INSTRUCTIONS_FILE")
-            instructions = Path(path).read_text(encoding="utf-8") if path else DEFAULT_INSTRUCTIONS
+        instructions = instructions_from_env(instructions)
+        reasoning_effort = reasoning_effort or os.environ.get("AUTONOMY_GATE_OPENAI_EFFORT")
         if client is None:
+            require_model_calls("OpenAI Responses API")
             try:
                 from openai import OpenAI
             except ImportError as exc:
@@ -98,8 +76,26 @@ class OpenAIResponsesAgent:
         self.instructions = instructions
         self.reasoning_effort = reasoning_effort
         self.max_output_tokens = max_output_tokens
+        self.usage = UsageMeter()
         self.fingerprint = fingerprint(
             "openai-responses", model, instructions, VERDICT_SCHEMA, reasoning_effort
+        )
+
+    def describe(self) -> dict[str, Any]:
+        return {
+            "provider": "openai-responses",
+            "model": self.model,
+            "effort": self.reasoning_effort,
+            "max_output_tokens": self.max_output_tokens,
+        }
+
+    def _count(self, response: Any) -> None:
+        usage = getattr(response, "usage", None)
+        details = getattr(usage, "output_tokens_details", None)
+        self.usage.add(
+            input_tokens=getattr(usage, "input_tokens", 0),
+            output_tokens=getattr(usage, "output_tokens", 0),
+            reasoning_tokens=getattr(details, "reasoning_tokens", 0),
         )
 
     def request_kwargs(self, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -124,6 +120,7 @@ class OpenAIResponsesAgent:
 
     def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
         response = self.client.responses.create(**self.request_kwargs(request))
+        self._count(response)
         status = getattr(response, "status", None)
         if status is not None and status != "completed":
             details = getattr(response, "incomplete_details", None) or getattr(
@@ -134,13 +131,4 @@ class OpenAIResponsesAgent:
             for part in getattr(item, "content", None) or []:
                 if getattr(part, "type", None) == "refusal":
                     raise AdapterError(f"model refused: {getattr(part, 'refusal', '')}")
-        text = getattr(response, "output_text", None)
-        if not text:
-            raise AdapterError("no output text")
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise AdapterError("output is not JSON") from exc
-        if not isinstance(data, dict):
-            raise AdapterError("output is not a JSON object")
-        return data
+        return verdict_from_text(getattr(response, "output_text", None))

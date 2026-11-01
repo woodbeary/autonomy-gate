@@ -1,6 +1,7 @@
 """The OpenAI adapter, driven by a fake client: no network, no API key, no openai package."""
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -91,3 +92,81 @@ def test_model_is_required(monkeypatch):
     with pytest.raises(ValueError):
         OpenAIResponsesAgent(client=FakeClient(None))
     assert VERDICT_SCHEMA["properties"]["action"]["enum"] == ["approve", "hold", "skip"]
+
+
+def test_no_real_client_is_built_without_the_opt_in(monkeypatch):
+    monkeypatch.delenv("AUTONOMY_GATE_ALLOW_MODEL_CALLS", raising=False)
+    monkeypatch.setitem(sys.modules, "openai", None)
+    with pytest.raises(PermissionError, match="AUTONOMY_GATE_ALLOW_MODEL_CALLS=1"):
+        OpenAIResponsesAgent("some-model")
+    monkeypatch.setenv("AUTONOMY_GATE_ALLOW_MODEL_CALLS", "yes")
+    with pytest.raises(PermissionError):
+        OpenAIResponsesAgent("some-model")
+
+
+def test_the_opt_in_builds_the_sdk_client(monkeypatch):
+    built = []
+
+    class OpenAI:
+        def __init__(self, **kwargs):
+            built.append(kwargs)
+
+    monkeypatch.setenv("AUTONOMY_GATE_ALLOW_MODEL_CALLS", "1")
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=OpenAI))
+    agent = OpenAIResponsesAgent("some-model", timeout_s=12.0)
+    assert isinstance(agent.client, OpenAI) and built == [{"timeout": 12.0}]
+
+
+def with_usage(response, inp, out, reasoning):
+    response.usage = SimpleNamespace(
+        input_tokens=inp,
+        output_tokens=out,
+        output_tokens_details=SimpleNamespace(reasoning_tokens=reasoning),
+    )
+    return response
+
+
+def test_every_response_counts_its_tokens_even_a_refusal():
+    ok = with_usage(completed('{"action": "skip", "reason": "x", "confidence": 0.5}'), 100, 20, 8)
+    refused = with_usage(
+        SimpleNamespace(
+            status="completed",
+            output_text="",
+            output=[SimpleNamespace(content=[SimpleNamespace(type="refusal", refusal="no")])],
+        ),
+        90,
+        5,
+        0,
+    )
+    agent = OpenAIResponsesAgent("some-model", client=FakeClient(ok))
+    agent(REQUEST)
+    agent.client._response = refused
+    with pytest.raises(AdapterError):
+        agent(REQUEST)
+    assert agent.usage.snapshot() == {
+        "calls": 2,
+        "input_tokens": 190,
+        "output_tokens": 25,
+        "reasoning_tokens": 8,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+    }
+
+
+def test_effort_and_model_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("AUTONOMY_GATE_OPENAI_MODEL", "env-model")
+    monkeypatch.setenv("AUTONOMY_GATE_OPENAI_EFFORT", "low")
+    agent = OpenAIResponsesAgent(client=FakeClient(None))
+    assert agent.request_kwargs(REQUEST)["reasoning"] == {"effort": "low"}
+    assert agent.describe() == {
+        "provider": "openai-responses",
+        "model": "env-model",
+        "effort": "low",
+        "max_output_tokens": 2000,
+    }
+    assert (
+        agent.fingerprint
+        != OpenAIResponsesAgent(
+            "env-model", client=FakeClient(None), reasoning_effort="high"
+        ).fingerprint
+    )

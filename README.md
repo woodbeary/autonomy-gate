@@ -226,13 +226,20 @@ my_agent.fingerprint = "my-agent prompt v3"  # optional; changes invalidate the 
 `--candidate mypackage.agent:my_agent` (or `path/to/file.py:my_agent`). An exception, a
 timeout (`--timeout`) or anything that isn't a valid verdict becomes a hold.
 
-### OpenAI Responses API (optional)
+### Model adapters (optional, off by default)
 
-With `OPENAI_API_KEY` and `AUTONOMY_GATE_OPENAI_MODEL` set in your environment:
+No adapter calls a model API unless you set `AUTONOMY_GATE_ALLOW_MODEL_CALLS=1`. Without
+it, building one fails before any SDK is imported, so a stray key in your environment can't
+spend money from a test or a demo. Nothing in the package root imports an adapter.
+
+### OpenAI Responses API
+
+With `OPENAI_API_KEY`, `AUTONOMY_GATE_OPENAI_MODEL` (and, if you want one,
+`AUTONOMY_GATE_OPENAI_EFFORT`) set in your environment:
 
 ```sh
 pip install -e ".[openai]"
-autonomy-gate replay labels.jsonl --candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent
+AUTONOMY_GATE_ALLOW_MODEL_CALLS=1 autonomy-gate replay labels.jsonl --candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent
 ```
 
 It asks for a strict JSON-schema verdict with Structured Outputs (`text.format`,
