@@ -26,13 +26,24 @@ from .lint import lint_file
 from .lock import DataReuseError, GateLock, LockError, fingerprint
 from .records import (
     DataError,
+    disjoint,
+    load_assisted,
     load_labels,
     load_records,
     parse_ts,
     split_provenance,
     write_jsonl,
 )
-from .replay import format_report, replay, report_dict, run_agent, stratified_sample, time_split
+from .replay import (
+    assisted_report,
+    format_assisted,
+    format_report,
+    replay,
+    report_dict,
+    run_agent,
+    stratified_sample,
+    time_split,
+)
 from .shadow import Shadow, load_shadow
 from .synthetic import SEED, FileOutbox, write_examples
 from .threshold import Bars
@@ -94,17 +105,25 @@ def cmd_lint(args: argparse.Namespace) -> int:
 
 
 def cmd_labels(args: argparse.Namespace) -> int:
-    human, agent, undecided = split_provenance(load_records(args.export))
-    write_jsonl(args.output, (r.to_dict() for r in human))
+    split = split_provenance(load_records(args.export))
+    write_jsonl(args.output, (r.to_dict() for r in split.human))
+    assisted = f"{len(split.assisted)} made by a person who saw the agent's suggestion"
+    if args.assisted:
+        write_jsonl(args.assisted, (r.to_dict() for r in split.assisted))
+        kept = f"kept {assisted} apart in {args.assisted}"
+    else:
+        kept = f"dropped {assisted} (keep them with --assisted)"
     print(
-        f"wrote {len(human)} human decisions to {args.output}; dropped {len(agent)} made by "
-        f"the agent and {len(undecided)} undecided"
+        f"wrote {len(split.human)} human decisions to {args.output}; {kept}; dropped "
+        f"{len(split.agent)} made by the agent and {len(split.undecided)} undecided"
     )
     return 0
 
 
 def cmd_replay(args: argparse.Namespace) -> int:
     records = load_labels(args.labels)
+    assisted = load_assisted(args.assisted) if args.assisted else []
+    disjoint(records, assisted)
     bars = _bars(args)
     agent = load_object(args.candidate)
     clock = not args.strip_clock
@@ -121,13 +140,31 @@ def cmd_replay(args: argparse.Namespace) -> int:
         sample = stratified_sample(sample, args.sample, seed=args.seed)
     calls = run_agent(agent, sample, clock=clock, workers=args.workers, timeout_s=args.timeout)
     report = replay(sample, calls, bars, clock=clock, baseline=baseline)
-    print(json.dumps(report_dict(report), indent=2) if args.json else format_report(report))
+    helped = None
+    if assisted:
+        helped_calls = run_agent(
+            agent, assisted, clock=clock, workers=args.workers, timeout_s=args.timeout
+        )
+        helped = assisted_report(assisted, helped_calls, report.threshold)
+    if args.json:
+        out = report_dict(report)
+        if helped is not None:
+            out["assisted"] = {
+                **helped.confusion.to_dict(bars.confidence),
+                "n": helped.n,
+                "agree": helped.agree,
+            }
+        print(json.dumps(out, indent=2))
+    else:
+        print(format_report(report))
+        if helped is not None:
+            print("\n" + format_assisted(helped, bars.confidence))
     if args.lock:
         if not clock:
             raise UsageError("refusing to lock a replay with the clock stripped")
         previous = GateLock.load(args.previous_lock) if args.previous_lock else None
         lock = GateLock.from_replay(
-            records,
+            [*records, *assisted],
             report,
             fingerprint=agent_fingerprint(agent, args.candidate, clock),
             previous=previous,
@@ -200,7 +237,8 @@ def cmd_shadow(args: argparse.Namespace) -> int:
 def cmd_check(args: argparse.Namespace) -> int:
     lock = GateLock.load(args.lock) if args.lock else None
     bars = _bars(args, lock)
-    report = check(load_shadow(args.shadow), load_labels(args.labels), bars, lock)
+    assisted = load_assisted(args.assisted) if args.assisted else []
+    report = check(load_shadow(args.shadow), load_labels(args.labels), bars, lock, assisted)
     if args.json:
         rows = [r.__dict__ for r in report.rows]
         print(json.dumps({**report.summary(), "rows": rows}, indent=2))
@@ -313,6 +351,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("labels", help="keep only human decisions from an export")
     s.add_argument("export")
     s.add_argument("-o", "--output", required=True)
+    s.add_argument(
+        "--assisted",
+        help="also write decisions made by a person who saw the agent's suggestion here",
+    )
     s.set_defaults(func=cmd_labels)
 
     s = sub.add_parser("replay", help="replay labeled decisions; choose and lock a threshold")
@@ -334,6 +376,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     s.add_argument("--lock", help="write the chosen threshold to this lock file")
     s.add_argument("--previous-lock", help="carry everything an earlier lock saw into the new one")
+    s.add_argument(
+        "--assisted",
+        help="decisions by a person who saw the agent's suggestion; reported apart",
+    )
     s.add_argument("--workers", type=int, default=1)
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_replay)
@@ -364,6 +410,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--labels", required=True)
     s.add_argument("--bars")
     s.add_argument("--lock", help="also check the re-test and the candidate; record the result")
+    s.add_argument(
+        "--assisted",
+        help="decisions by a person who saw the agent's suggestion; reported, never a bar",
+    )
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_check)
 

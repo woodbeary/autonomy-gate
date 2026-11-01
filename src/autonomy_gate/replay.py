@@ -18,7 +18,7 @@ from typing import Any
 
 from .metrics import Confusion, confusion_at, mcnemar_exact, p95
 from .policy import APPROVE, HOLD, SKIP, Agent, Call, Verdict, apply_threshold, decide
-from .records import Record, require_human_labels
+from .records import Record, require_assisted, require_human_labels
 from .threshold import Bars, OperatingPoint, choose_threshold, threshold_for_precision
 
 
@@ -249,6 +249,47 @@ def replay(
         only_b = sum(1 for x, y in zip(c_caught, b_caught, strict=True) if y and not x)
         matched = Matched(target, point, only_c, only_b, mcnemar_exact(only_c, only_b))
     return ReplayReport(**{**report.__dict__, "baseline": base, "matched": matched})
+
+
+@dataclass(frozen=True)
+class AssistedReport:
+    """The agent against people who saw its suggestion. Never a label, so never a bar."""
+
+    confusion: Confusion
+    agree: int
+    threshold: float | None
+
+    @property
+    def n(self) -> int:
+        return self.confusion.n
+
+
+def assisted_report(
+    records: Sequence[Record], calls: Sequence[Call], threshold: float | None
+) -> AssistedReport:
+    """Score the agent at ``threshold`` against assisted decisions, apart from the labels."""
+    records = require_assisted(records, where="replay --assisted")
+    if [r.id for r in records] != [c.id for c in calls]:
+        raise ValueError("calls must line up with records, one per record, in order")
+    items = [
+        (approve_score(c), bool(r.assisted_label)) for r, c in zip(records, calls, strict=True)
+    ]
+    finals = [_final(c, threshold).action == APPROVE for c in calls]
+    agree = sum(1 for f, (_, y) in zip(finals, items, strict=True) if f == y)
+    return AssistedReport(confusion_at(items, threshold), agree, threshold)
+
+
+def format_assisted(report: AssistedReport, confidence: float) -> str:
+    where = "no threshold" if report.threshold is None else f"threshold {report.threshold:.4g}"
+    return "\n".join(
+        [
+            f"Assisted decisions (a person who saw the agent's suggestion): {report.n} "
+            "decisions, reported apart. They never choose the threshold and are never a "
+            "re-test.",
+            f"  at the candidate's {where}: {_point(report.confusion, confidence)}",
+            f"  same call as the person on {report.agree} of {report.n}",
+        ]
+    )
 
 
 def _safe(scorer: Callable[[Record], float], record: Record) -> float | None:

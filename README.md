@@ -41,10 +41,15 @@ rebuilt on synthetic data. None of my business's data is in it.
   0.60. The bars ask for both: precision ≥ 0.90 *and* a lower bound ≥ 0.85, at least 40
   overlaps with a person including 25 approvals, and a recall floor you choose.
 - **The agent's own decisions poison the labels.** Every decision says who made it
-  (`decidedBy: human | agent`). Every path that turns decisions into labels or agreement
-  numbers refuses agent-made ones; `autonomy-gate labels` filters a raw export. Labels a
-  person made from facts the agent couldn't know (`basis: operational`, such as a full
-  schedule) are reported apart from content judgments.
+  (`decidedBy: human | human_assisted | agent`). Every path that turns decisions into labels
+  or agreement numbers refuses agent-made ones; `autonomy-gate labels` filters a raw export.
+  Labels a person made from facts the agent couldn't know (`basis: operational`, such as a
+  full schedule) are reported apart from content judgments.
+- **A person who saw the suggestion isn't an independent label.** Once the agent's skips go
+  to a person "with the suggestion attached", that person's call is `human_assisted`. It is
+  kept in its own file (`labels --assisted`), reported apart in `replay --assisted` and
+  `check --assisted`, never chooses the threshold, never counts toward a bar, and is never a
+  re-test: every label path refuses it.
 - **"Success" is a claim, not a fact.** A send counts as sent only with a receipt from the
   sender, or a receipt found by looking its request id up. An answer lost to a crash or a
   timeout ends `unconfirmed_never_resubmitted` and is never sent again.
@@ -198,6 +203,12 @@ One JSON object per line (wrapped here to read):
 
 `request` is yours: whatever the agent should see. The baseline reads the numeric and
 boolean `features`. Live requests for `shadow` and `run` have no `decision`.
+
+`decidedBy` is `human` for a person who decided without seeing the agent's answer,
+`human_assisted` for a person who saw it first (anything decided from an `advisory_skip`,
+or from a hold that showed the agent's verdict), and `agent` for the agent itself. Split a
+raw export with `autonomy-gate labels export.jsonl -o labels.jsonl --assisted
+assisted.jsonl`.
 
 ## Your agent
 

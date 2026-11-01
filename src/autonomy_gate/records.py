@@ -15,10 +15,16 @@ its own idea of today.
 ``capturedAt`` is when the request snapshot was taken. A snapshot taken after the decision
 can carry facts nobody had at decision time.
 
-``decision`` is present once someone has decided. ``decidedBy`` says who: ``human`` or
-``agent``. Only human decisions are labels. ``basis`` says whether the person decided from
-the request itself (``content``) or from facts the agent could not have known, such as a
-full schedule (``operational``).
+``decision`` is present once someone has decided. ``decidedBy`` says who:
+
+* ``human``: a person decided without seeing the agent's suggestion. Only these are labels.
+* ``human_assisted``: a person decided after seeing the agent's suggestion, as with every
+  advisory skip. It isn't an independent label, so it is reported apart, never chooses a
+  threshold, never counts toward a go-live bar, and is never a held-out re-test.
+* ``agent``: the agent decided. Never a label.
+
+``basis`` says whether the person decided from the request itself (``content``) or from
+facts the agent could not have known, such as a full schedule (``operational``).
 """
 
 from __future__ import annotations
@@ -30,11 +36,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, NamedTuple
 
 HUMAN = "human"
+HUMAN_ASSISTED = "human_assisted"
 AGENT = "agent"
-PROVENANCE = (HUMAN, AGENT)
+PROVENANCE = (HUMAN, HUMAN_ASSISTED, AGENT)
 LABEL_ACTIONS = ("approve", "skip")
 BASES = ("content", "operational")
 
@@ -109,7 +116,10 @@ class Decision:
         if not isinstance(obj, Mapping):
             raise DataError("decision must be an object")
         if "decidedBy" not in obj:
-            raise DataError("decision has no decidedBy: say whether a human or the agent made it")
+            raise DataError(
+                "decision has no decidedBy: say whether a person (human), a person who saw "
+                "the agent's suggestion (human_assisted), or the agent made it"
+            )
         return cls(
             action=obj.get("action"),
             decided_by=obj["decidedBy"],
@@ -157,8 +167,18 @@ class Record:
 
     @property
     def label(self) -> bool | None:
-        """True if a person approved, False if a person skipped, None otherwise."""
+        """True if a person approved, False if a person skipped, None otherwise.
+
+        Only an independent human decision is a label; an assisted one gives None here.
+        """
         if self.decision is None or self.decision.decided_by != HUMAN:
+            return None
+        return self.decision.approved
+
+    @property
+    def assisted_label(self) -> bool | None:
+        """The decision of a person who saw the agent's suggestion, or None."""
+        if self.decision is None or self.decision.decided_by != HUMAN_ASSISTED:
             return None
         return self.decision.approved
 
@@ -258,6 +278,12 @@ def require_human_labels(records: Sequence[Record], where: str = "labels") -> li
     for r in records:
         if r.decision is None:
             raise DataError(f"{where}: {r.id} has no decision")
+        if r.decision.decided_by == HUMAN_ASSISTED:
+            raise ProvenanceError(
+                f"{where}: {r.id} was decided by a person who saw the agent's suggestion "
+                "(human_assisted), so it isn't an independent label. Keep it apart with "
+                "`autonomy-gate labels --assisted` and pass that file as --assisted."
+            )
         if r.decision.decided_by != HUMAN:
             raise ProvenanceError(
                 f"{where}: {r.id} was decided by {r.decision.decided_by!r}. Only human "
@@ -267,20 +293,47 @@ def require_human_labels(records: Sequence[Record], where: str = "labels") -> li
 
 
 def load_labels(path: str | Path) -> list[Record]:
-    """Read a label file. Fails if any record isn't a human decision."""
+    """Read a label file. Fails if any record isn't an independent human decision."""
     return require_human_labels(load_records(path), where=str(path))
 
 
-def split_provenance(records: Sequence[Record]) -> tuple[list[Record], list[Record], list[Record]]:
-    """Split an export into (human-decided, agent-decided, undecided)."""
-    human: list[Record] = []
-    agent: list[Record] = []
-    undecided: list[Record] = []
+def require_assisted(records: Sequence[Record], where: str = "assisted") -> list[Record]:
+    """Return ``records`` if every one is a decision by a person who saw the suggestion."""
     for r in records:
         if r.decision is None:
-            undecided.append(r)
-        elif r.decision.decided_by == HUMAN:
-            human.append(r)
-        else:
-            agent.append(r)
-    return human, agent, undecided
+            raise DataError(f"{where}: {r.id} has no decision")
+        if r.decision.decided_by != HUMAN_ASSISTED:
+            raise ProvenanceError(
+                f"{where}: {r.id} was decided by {r.decision.decided_by!r}; this file takes "
+                "only human_assisted decisions"
+            )
+    return list(records)
+
+
+def load_assisted(path: str | Path) -> list[Record]:
+    """Read a file of decisions made by a person who saw the agent's suggestion."""
+    return require_assisted(load_records(path), where=str(path))
+
+
+def disjoint(labels: Sequence[Record], assisted: Sequence[Record]) -> None:
+    """Raise if a request is both an independent label and an assisted decision."""
+    both = sorted({r.id for r in labels} & {r.id for r in assisted})
+    if both:
+        shown = ", ".join(both[:5]) + (" ..." if len(both) > 5 else "")
+        raise DataError(f"{len(both)} ids are in both the labels and the assisted file: {shown}")
+
+
+class ProvenanceSplit(NamedTuple):
+    human: list[Record]
+    assisted: list[Record]
+    agent: list[Record]
+    undecided: list[Record]
+
+
+def split_provenance(records: Sequence[Record]) -> ProvenanceSplit:
+    """Split an export into human, human-assisted, agent-decided and undecided records."""
+    split = ProvenanceSplit([], [], [], [])
+    by = {HUMAN: split.human, HUMAN_ASSISTED: split.assisted, AGENT: split.agent}
+    for r in records:
+        (split.undecided if r.decision is None else by[r.decision.decided_by]).append(r)
+    return split

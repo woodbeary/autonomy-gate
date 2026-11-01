@@ -62,9 +62,10 @@ def test_agreement_report_refuses_agent_decisions(record):
 
 def test_split_keeps_agent_decisions_out_of_labels(record):
     records = [record(1, label=True), record(2, label=False, by=AGENT), record(3)]
-    human, agent, undecided = split_provenance(records)
-    assert [r.id for r in human] == ["r-0001"]
-    assert [r.id for r in agent] == ["r-0002"]
-    assert [r.id for r in undecided] == ["r-0003"]
+    split = split_provenance(records)
+    assert [r.id for r in split.human] == ["r-0001"]
+    assert [r.id for r in split.agent] == ["r-0002"]
+    assert [r.id for r in split.undecided] == ["r-0003"]
+    assert split.assisted == []
     assert records[1].label is None
-    require_human_labels(human)
+    require_human_labels(split.human)

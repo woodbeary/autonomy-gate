@@ -8,7 +8,9 @@ Errors (the file can't be used as it is):
   the decision, so it can hold facts nobody had at decision time (a reply count that kept
   growing, a status that changed).
 * **provenance**: a decision without ``decidedBy``, or, in a label file, a decision the
-  agent made. The agent's own decisions must never become its labels.
+  agent made or one a person made after seeing the agent's suggestion
+  (``human_assisted``). The agent's own decisions must never become its labels, and an
+  assisted decision isn't an independent one.
 * malformed JSON, a bad action, a duplicate id.
 
 Notes (worth knowing, not errors): how many requests use relative time words, which is
@@ -23,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .records import AGENT, DataError, Decision, Record, parse_ts, read_jsonl
+from .records import AGENT, HUMAN_ASSISTED, DataError, Decision, Record, parse_ts, read_jsonl
 
 RELATIVE_TIME = re.compile(
     r"\b(today|tonight|tomorrow|this (morning|afternoon|evening|weekend|week)|"
@@ -48,7 +50,7 @@ def lint_file(path: str | Path, *, labels: bool = True, limit: int = 20) -> Lint
     """Lint one JSONL file. ``labels=False`` allows agent-made decisions (a raw export)."""
     result = LintResult(str(path))
     seen: set[str] = set()
-    relative = agent_made = 0
+    relative = agent_made = assisted = 0
     errors: list[str] = []
     try:
         rows = list(read_jsonl(path))
@@ -72,6 +74,13 @@ def lint_file(path: str | Path, *, labels: bool = True, limit: int = 20) -> Lint
                 problems.append(
                     "provenance: decided by the agent; agent decisions are never labels"
                 )
+        if isinstance(decision, Mapping) and decision.get("decidedBy") == HUMAN_ASSISTED:
+            assisted += 1
+            if labels:
+                problems.append(
+                    "provenance: decided by a person who saw the agent's suggestion; it isn't "
+                    "an independent label (`autonomy-gate labels --assisted` keeps it apart)"
+                )
         request = obj.get("request") if isinstance(obj, Mapping) else None
         if isinstance(request, Mapping) and RELATIVE_TIME.search(str(request.get("text", ""))):
             relative += 1
@@ -87,6 +96,11 @@ def lint_file(path: str | Path, *, labels: bool = True, limit: int = 20) -> Lint
     if agent_made and not labels:
         result.notes.append(
             f"{agent_made} decisions were made by the agent; `autonomy-gate labels` drops them"
+        )
+    if assisted and not labels:
+        result.notes.append(
+            f"{assisted} decisions were made by a person who saw the agent's suggestion; "
+            "`autonomy-gate labels --assisted` keeps them apart"
         )
     return result
 

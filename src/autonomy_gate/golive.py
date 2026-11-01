@@ -5,6 +5,9 @@ the bars one by one. It reports RED and names each failing bar until all of them
 Only human decisions count: the label file goes through the same provenance check as
 every other label path, so the agent can't agree with itself.
 
+Decisions by a person who saw the agent's suggestion (``human_assisted``) can be passed
+apart. Their overlaps are reported next to the bars and count toward none of them.
+
 Approvals and skips are judged separately. Approvals gate going live. Skips (closing a
 request without a person) stay advisory until they reach their own bar; until then the
 runtime routes them to a person with the agent's suggestion attached.
@@ -19,7 +22,7 @@ from typing import Any
 from .lock import GateLock
 from .metrics import Confusion, p95, wilson
 from .policy import APPROVE, SKIP
-from .records import Record, parse_ts, require_human_labels
+from .records import Record, disjoint, parse_ts, require_assisted, require_human_labels
 from .threshold import Bars
 
 
@@ -40,6 +43,8 @@ class CheckReport:
     skip_agree: int
     skips_earned: bool
     bars: Bars
+    assisted_overlaps: int = 0
+    assisted_agree: int = 0
 
     @property
     def failing(self) -> list[BarResult]:
@@ -59,6 +64,8 @@ class CheckReport:
             "precision": self.confusion.precision,
             "recall": self.confusion.recall,
             "shadow_entries": self.entries,
+            "assisted_overlaps": self.assisted_overlaps,
+            "assisted_agree": self.assisted_agree,
         }
 
 
@@ -67,9 +74,13 @@ def check(
     labels: Sequence[Record],
     bars: Bars,
     lock: GateLock | None = None,
+    assisted: Sequence[Record] = (),
 ) -> CheckReport:
     labels = require_human_labels(labels, where="check")
+    assisted = require_assisted(assisted, where="check --assisted")
+    disjoint(labels, assisted)
     human = {r.id: r for r in labels}
+    helped = {r.id: r for r in assisted}
     rows: list[BarResult] = []
 
     times = [parse_ts(e["decidedAt"], "decidedAt") for e in shadow]
@@ -181,7 +192,21 @@ def check(
         and len(skips) > 0
         and skip_agree / len(skips) >= bars.skip_min_precision
     )
-    return CheckReport(rows, c, len(shadow), len(skips), skip_agree, skips_earned, bars)
+    seen_with_help = [(e, helped[e["id"]]) for e in shadow if e["id"] in helped]
+    helped_agree = sum(
+        1 for e, r in seen_with_help if (e["action"] == APPROVE) == bool(r.assisted_label)
+    )
+    return CheckReport(
+        rows,
+        c,
+        len(shadow),
+        len(skips),
+        skip_agree,
+        skips_earned,
+        bars,
+        len(seen_with_help),
+        helped_agree,
+    )
 
 
 def format_check(report: CheckReport) -> str:
@@ -207,5 +232,10 @@ def format_check(report: CheckReport) -> str:
         lines.append(
             f"Skips: advisory ({rate}, lower bound {low:.3f}); closing a request without a "
             f"person needs >= {b.skip_min_precision:.2f} on >= {b.skip_min_overlaps}."
+        )
+    if report.assisted_overlaps:
+        lines.append(
+            f"Assisted overlaps (a person who saw the suggestion): {report.assisted_overlaps}, "
+            f"same call on {report.assisted_agree}. Reported apart; they count toward no bar."
         )
     return "\n".join(lines)
