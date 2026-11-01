@@ -9,6 +9,8 @@ dist/
 .ruff_cache/
 .env
 *.db
+*.db-wal
+*.db-shm
 *.lock
 shadow*.jsonl
 outbox*.jsonl

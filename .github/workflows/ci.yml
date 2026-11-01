@@ -28,6 +28,8 @@ jobs:
       - name: Label files carry a clock and only human decisions
         run: autonomy-gate lint examples/leads_history.jsonl examples/leads_heldout.jsonl examples/leads_live_labels.jsonl
       - name: Test
+        env:
+          AUTONOMY_GATE_REQUIRE_POWERLOSS: "1"
         run: pytest
 
   secrets:

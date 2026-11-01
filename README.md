@@ -337,7 +337,10 @@ ledger (run one runner per ledger).
   nothing in shadow refers to it. It finds modules with `importlib.util.find_spec`, which
   imports their parent packages, so point it only at code you would import anyway.
 - A timed-out model call keeps running in a background thread; its answer is ignored.
-- `ledger.db` is SQLite with `synchronous=FULL`. A send and its ledger row can't be one
+- `ledger.db` is SQLite in WAL mode with `synchronous=FULL` (and `fullfsync` on macOS), so
+  a committed `sending` row survives a power cut as well as a crash;
+  `tests/test_durability.py` simulates the cut by keeping only what was fsynced. WAL needs a
+  local disk, and the ledger takes one runner. A send and its ledger row still can't be one
   transaction, which is why a lost answer is settled by lookup.
 
 ## License

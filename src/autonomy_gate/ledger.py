@@ -17,6 +17,14 @@ States:
 
 A request id is derived from the request's own id and is unique in the table, so each
 request can reach ``sending`` at most once, ever.
+
+Durability: the database runs in WAL mode with ``synchronous=FULL``, so every commit is
+fsynced to the write-ahead log before it returns, and ``fullfsync`` asks for
+``F_FULLFSYNC`` where the platform has it (macOS). A ``sending`` row that ``record`` or
+``begin_send`` returned from survives a power cut, not only a crashed process. SQLite's
+default rollback journal with ``FULL`` doesn't promise that: the commit deletes the journal,
+and if that deletion never reaches the disk the journal rolls the row back on the next open.
+``tests/test_durability.py`` simulates the cut. WAL needs a local disk and one host.
 """
 
 from __future__ import annotations
@@ -39,6 +47,8 @@ STATES = (
     "sent",
     "unconfirmed_never_resubmitted",
 )
+
+DURABILITY = ("synchronous=FULL", "fullfsync=ON", "checkpoint_fullfsync=ON")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
@@ -101,7 +111,15 @@ class Ledger:
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
         self._db = sqlite3.connect(self.path, isolation_level=None, timeout=10)
-        self._db.execute("PRAGMA synchronous=FULL")
+        mode = self._db.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+        if mode != "wal":
+            self._db.close()
+            raise LedgerError(
+                f"{self.path}: SQLite kept journal_mode {mode!r} instead of WAL; "
+                "put the ledger on a local disk"
+            )
+        for pragma in DURABILITY:
+            self._db.execute(f"PRAGMA {pragma}")
         self._db.executescript(SCHEMA)
 
     def close(self) -> None:
