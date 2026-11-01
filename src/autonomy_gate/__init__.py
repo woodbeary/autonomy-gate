@@ -7,7 +7,7 @@ Then let it act behind fail-closed checks, a kill switch and a write-ahead ledge
 never sends twice.
 """
 
-from .actuator import CycleReport, Guard, NotEarned, Sender
+from .actuator import CycleReport, Guard, NotEarned, Sender, SenderContractError, check_sender
 from .baseline import LogisticBaseline
 from .golive import CheckReport, check, format_check
 from .isolation import IsolationError, assert_isolated
@@ -55,6 +55,7 @@ __all__ = [
     "Record",
     "ReplayReport",
     "Sender",
+    "SenderContractError",
     "Shadow",
     "StaticKillSwitch",
     "SwitchState",
@@ -62,6 +63,7 @@ __all__ = [
     "apply_rails",
     "assert_isolated",
     "check",
+    "check_sender",
     "choose_threshold",
     "decide",
     "fingerprint",

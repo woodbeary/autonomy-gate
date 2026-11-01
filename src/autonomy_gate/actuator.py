@@ -20,6 +20,7 @@ for this exact candidate. Without a sender (live off, the default) nothing is ev
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -37,10 +38,61 @@ class NotEarned(Exception):
 
 class Sender(Protocol):
     def send(self, request_id: str, payload: Mapping[str, Any]) -> str | None:
-        """Act once. Use ``request_id`` as the idempotency key. Return a receipt id."""
+        """Act at most once per ``request_id`` and return a receipt id.
+
+        ``request_id`` is the idempotency key: a second call with an id that already acted
+        must not act again, and returns the first receipt. The ledger is the first line of
+        defense against a second send; this is the second. :func:`check_sender` tests it.
+        """
 
     def lookup(self, request_id: str) -> str | None:
         """Return the receipt for ``request_id`` if the action happened, else None."""
+
+
+class SenderContractError(AssertionError):
+    """A sender doesn't keep the at-most-once contract on ``request_id``."""
+
+
+def check_sender(
+    sender: Sender,
+    payload: Mapping[str, Any] | None = None,
+    *,
+    request_id: str | None = None,
+    actions: Callable[[], int] | None = None,
+) -> str:
+    """Exercise ``sender`` once and raise :class:`SenderContractError` if it breaks the contract.
+
+    It sends one request twice under the same new request id. The lookup must find nothing
+    before the send and the first receipt after it, and the second send must return that
+    same receipt. Pass ``actions``, a count of what the sender has really done (rows in an
+    outbox, messages in a test inbox), to prove the second send didn't act again. It really
+    sends, so point it at a test destination. Returns the receipt.
+    """
+    request_id = request_id or "ag_check_" + uuid.uuid4().hex[:16]
+    payload = dict(payload or {"item_id": request_id, "reason": "sender_contract_check"})
+    found = sender.lookup(request_id)
+    if found:
+        raise SenderContractError(f"lookup before any send returned {found!r}; expected None")
+    before = actions() if actions is not None else 0
+    first = sender.send(request_id, payload)
+    if not first:
+        raise SenderContractError("send returned no receipt")
+    found = sender.lookup(request_id)
+    if found != first:
+        raise SenderContractError(f"lookup after the send returned {found!r}, not {first!r}")
+    second = sender.send(request_id, payload)
+    if second != first:
+        raise SenderContractError(
+            f"a second send with the same request id returned {second!r}, not {first!r}: "
+            "it acted again instead of replaying"
+        )
+    if actions is not None:
+        acted = actions() - before
+        if acted != 1:
+            raise SenderContractError(
+                f"two sends with one request id acted {acted} times; it must act once"
+            )
+    return str(first)
 
 
 def default_payload(record: Record, verdict: Verdict) -> dict[str, Any]:

@@ -255,6 +255,17 @@ guard.cycle(new_records)   # call once per cycle
 `fp` has to match the fingerprint `replay --lock` stored for the same `--candidate`, or
 `Guard` refuses to go live; `agent_fingerprint` computes it the same way the CLI does.
 
+`send` must act at most once per `request_id`: a second call with an id that already acted
+returns the first receipt and does nothing else. The ledger is what stops a second send; the
+idempotency key is the backstop if a ledger row is ever lost. Check your sender against a
+test destination before going live:
+
+```python
+from autonomy_gate import check_sender
+
+check_sender(MySender(), actions=count_messages_in_test_inbox)  # raises SenderContractError
+```
+
 Leave `sender` out and nothing can be sent: approvals are held (`live_off`). Rails are
 functions `(request, verdict) -> verdict | None`; the most cautious verdict wins and a rail
 can never turn a hold or a skip into an approval. `autonomy_gate.isolation.assert_isolated`
