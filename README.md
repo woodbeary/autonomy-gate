@@ -388,6 +388,12 @@ and `ANTHROPIC_API_KEY`. A sample of 200 is 400 calls. The synthetic "person" is
 so precision and recall here measure agreement with that formula; the difference between
 the two arms is the part that speaks to the clock.
 
+Both arms get the same instructions. The adapters' default instructions say what to do *if*
+the request includes `decidedAt`; instructions of your own that say every request has it
+could push the bare arm toward holds. Only `decidedAt` is removed: the synthetic requests
+keep `postedAt`, usually minutes to a few hours before the decision, so the bare arm still
+knows when the post went up, just not when it was decided.
+
 This repository claims no real-model number. The only figures above come from the
 stand-in. Run it with your key and commit the report; if a real model doesn't lose recall
 without the clock, the report says so.
@@ -409,8 +415,8 @@ The synthetic numbers above measure nothing real. To get real ones:
 
 ## What was tested
 
-- `pytest`: 151 tests in `tests/`, all passing locally on Python 3.11, 3.12 and 3.13 with
-  both SDKs installed and the power-cut simulation required (148 pass and 3 skip where the
+- `pytest`: 154 tests in `tests/`, all passing locally on Python 3.11, 3.12 and 3.13 with
+  both SDKs installed and the power-cut simulation required (151 pass and 3 skip where the
   SDKs aren't installed). The CI workflow runs them on the same three, plus a job with both
   SDKs. They cover the Wilson interval against known values, threshold choice, the clock
   and leakage lint, provenance on every label path (including the committed example files

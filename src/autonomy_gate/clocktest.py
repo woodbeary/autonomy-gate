@@ -6,6 +6,13 @@ the model's own answers (no threshold, so nothing tuned on one arm favors it), p
 two arms on the person's approvals with an exact McNemar test, and splits recall by
 whether the request uses relative time words, which is where a missing clock should show.
 
+Both arms get the same instructions, so instructions that say every request carries
+``decidedAt`` would tell the bare arm about a field it doesn't have and could push it toward
+holds; the adapters' default instructions only say what to do if it is there. Everything
+else in the request stays, including any other timestamp. The synthetic requests carry
+``postedAt``, usually minutes to a few hours before the decision, so on them the bare arm
+means no ``decidedAt``, not no time at all.
+
 It records what a reader needs to trust or repeat the number: the model and effort the
 adapter reports, the date, how many decisions, a hash of the label file, the candidate's
 fingerprint, and the tokens each arm used, priced if you pass prices. It claims nothing on
@@ -23,7 +30,7 @@ from typing import Any
 
 from . import __version__
 from .lint import RELATIVE_TIME
-from .lock import fingerprint
+from .lock import agent_fingerprint
 from .metrics import Confusion, confusion_at, mcnemar_exact, p95
 from .policy import Agent, Call
 from .records import Record, require_human_labels
@@ -111,9 +118,15 @@ def measure_clock(
     workers: int = 1,
     timeout_s: float | None = None,
     usd_per_mtok: tuple[float, float] | None = None,
+    candidate: str | None = None,
     meta: Mapping[str, Any] | None = None,
 ) -> ClockReport:
-    """Ask every record twice, with the clock and without it, and compare the answers."""
+    """Ask every record twice, with the clock and without it, and compare the answers.
+
+    ``candidate`` is the ``--candidate`` spec the agent was loaded from. With it, or with an
+    agent that has its own ``fingerprint``, the report carries the same candidate fingerprint
+    ``replay --lock`` would record; with neither, the fingerprint is None.
+    """
     records = require_human_labels(records, where="clock-test")
     before = _snapshot(agent)
     clocked = run_agent(agent, records, clock=True, workers=workers, timeout_s=timeout_s)
@@ -141,8 +154,10 @@ def measure_clock(
             "autonomy_gate": __version__,
             "ran_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
             "agent": describe() if callable(describe) else None,
-            "fingerprint": fingerprint(
-                {"agent": getattr(agent, "fingerprint", None), "clock": True}
+            "fingerprint": (
+                agent_fingerprint(agent, candidate or "", True)
+                if candidate or getattr(agent, "fingerprint", None)
+                else None
             ),
             "n": len(records),
             "positives": sum(1 for r in records if r.label),

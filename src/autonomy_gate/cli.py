@@ -24,7 +24,7 @@ from .golive import check, format_check
 from .killswitch import FileKillSwitch
 from .ledger import Ledger
 from .lint import lint_file
-from .lock import DataReuseError, GateLock, LockError, fingerprint
+from .lock import DataReuseError, GateLock, LockError, agent_fingerprint
 from .records import (
     DataError,
     disjoint,
@@ -73,10 +73,6 @@ def load_object(spec: str) -> Any:
     except AttributeError as exc:
         raise UsageError(f"{target} has no {attr!r}") from exc
     return obj() if inspect.isclass(obj) else obj
-
-
-def agent_fingerprint(agent: Any, spec: str, clock: bool) -> str:
-    return fingerprint({"agent": getattr(agent, "fingerprint", None) or spec, "clock": clock})
 
 
 def _bars(args: argparse.Namespace, lock: GateLock | None = None) -> Bars:
@@ -192,6 +188,7 @@ def cmd_clock_test(args: argparse.Namespace) -> int:
         workers=args.workers,
         timeout_s=args.timeout,
         usd_per_mtok=None if prices[0] is None else (prices[0], prices[1]),
+        candidate=args.candidate,
         meta={
             "candidate": args.candidate,
             "labels": Path(args.labels).name,

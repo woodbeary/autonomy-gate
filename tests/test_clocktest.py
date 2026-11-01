@@ -9,8 +9,10 @@ import textwrap
 
 import pytest
 
+from autonomy_gate.adapters.common import DEFAULT_INSTRUCTIONS
 from autonomy_gate.cli import main
 from autonomy_gate.clocktest import measure_clock
+from autonomy_gate.lock import GateLock, agent_fingerprint
 from autonomy_gate.synthetic import candidate
 from autonomy_gate.usage import UsageMeter
 
@@ -132,3 +134,42 @@ def test_without_prices_there_is_no_cost(tmp_path, capsys):
     assert code == 0
     text = capsys.readouterr().out
     assert "no usage reported" in text and "--usd-per-mtok-in" in text
+
+
+def test_the_report_carries_the_fingerprint_the_lock_records(tmp_path, capsys):
+    main(["synth", str(tmp_path)])
+    agent_file = tmp_path / "plain_agent.py"
+    agent_file.write_text(
+        "from autonomy_gate.synthetic import candidate\n\n\n"
+        "def plain(request):\n"
+        "    return candidate(request)\n",
+        encoding="utf-8",
+    )
+    spec = f"{agent_file}:plain"
+    labels = str(tmp_path / "leads_history.jsonl")
+    lock, out = tmp_path / "gate.lock", tmp_path / "clock.json"
+    main(["replay", labels, "--candidate", spec, "--lock", str(lock)])
+    main(["clock-test", labels, "--candidate", spec, "--sample", "40", "--out", str(out)])
+    capsys.readouterr()
+    recorded = json.loads(out.read_text(encoding="utf-8"))["meta"]["fingerprint"]
+    assert recorded == GateLock.load(lock).fingerprint
+
+
+def test_a_plain_callable_is_fingerprinted_by_its_spec_or_not_at_all(sets):
+    records = sets["history"][:10]
+
+    def plain(request):
+        return candidate(request)
+
+    assert measure_clock(plain, records).meta["fingerprint"] is None
+    named = measure_clock(plain, records, candidate="mine:plain").meta["fingerprint"]
+    other = measure_clock(plain, records, candidate="mine:other").meta["fingerprint"]
+    assert named == agent_fingerprint(plain, "mine:plain", True) != other
+    own = measure_clock(candidate, records).meta["fingerprint"]
+    assert own == agent_fingerprint(candidate, C, True)
+
+
+def test_the_default_instructions_do_not_tell_the_bare_arm_it_has_a_clock():
+    text = " ".join(DEFAULT_INSTRUCTIONS.split())
+    assert "If the request includes decidedAt" in text
+    assert "The request includes decidedAt" not in text

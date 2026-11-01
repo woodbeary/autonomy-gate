@@ -59,6 +59,15 @@ def fingerprint(*parts: Any) -> str:
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def agent_fingerprint(agent: Any, spec: str, clock: bool) -> str:
+    """The candidate fingerprint a lock records for ``agent``.
+
+    It is the agent's own ``fingerprint`` attribute if it has one, else the ``--candidate``
+    spec it was loaded from, together with whether its requests carry the clock.
+    """
+    return fingerprint({"agent": getattr(agent, "fingerprint", None) or spec, "clock": clock})
+
+
 @dataclass
 class GateLock:
     threshold: float

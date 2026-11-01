@@ -11,7 +11,8 @@
 - **Assisted provenance.** `decidedBy: "human_assisted"` marks a person who saw the agent's
   suggestion. Every label path refuses it; `labels --assisted`, `replay --assisted` and
   `check --assisted` keep and report it apart. It never chooses a threshold, counts toward a
-  bar, or serves as a re-test.
+  bar, or serves as a re-test. `split_provenance` now returns four groups (human, assisted,
+  agent, undecided) as a named tuple.
 - **Claude adapter** (`autonomy_gate.adapters.anthropic_messages:ClaudeMessagesAgent`)
   beside the OpenAI one: `output_config.format` JSON schema, explicit effort, refusal or
   `max_tokens` becomes a hold, enum lowercased, no fallback models.
@@ -19,8 +20,11 @@
   `AUTONOMY_GATE_ALLOW_MODEL_CALLS=1`. Both count tokens per call. The OpenAI adapter reads
   `AUTONOMY_GATE_OPENAI_EFFORT`.
 - **`clock-test`.** Asks the same decisions with and without `decidedAt` and reports the
-  paired difference, model, effort, date, n, tokens and cost. No real-model number is
-  claimed.
+  paired difference, model, effort, date, n, the candidate fingerprint `replay --lock`
+  records, tokens and cost. No real-model number is claimed. The adapters' default
+  instructions now say what to do if the request has `decidedAt` rather than that it always
+  does, so the arm without it isn't told about a field it lacks; this changes their
+  fingerprint.
 - **README.** The history is corrected and dated; documented commands are parsed by a test.
 - **CI.** The power-cut simulation is required, and a job runs both adapters through their
   real SDKs against a fake API on 127.0.0.1.

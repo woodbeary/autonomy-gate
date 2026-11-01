@@ -36,9 +36,9 @@ You decide what happens to one incoming request. Answer with an action:
 - approve: it is worth acting on now;
 - hold: you are unsure, or it needs a person;
 - skip: it is not worth acting on.
-The request includes decidedAt, the moment of this decision. Judge every time-dependent
-phrase ("today", "before 5pm", "this weekend") against decidedAt, never against your own
-idea of the date. Give a short reason code and your confidence that a person would agree.
+If the request includes decidedAt, it is the moment of this decision: judge every
+time-dependent phrase ("today", "before 5pm", "this weekend") against it, never against your
+own idea of the date. Give a short reason code and your confidence that a person would agree.
 """
 
 
