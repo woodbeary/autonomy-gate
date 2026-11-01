@@ -23,12 +23,13 @@ synthetic data with a stand-in model, so it needs no API key.
 In October 2026 I had to decide whether the lead agent I built for my hauling business could
 act without me. In order:
 
-- **Oct 9, first release: a scorecard, not an LLM.** A logistic regression fitted on 1,245
-  of my labeled decisions. On a time-split held-out set it approved 22 posts and was right
-  on 19 (0.86, Wilson 95% 0.67 to 0.95), at 10% recall. I had looked at that held-out set
-  three times while fixing the policy, so 0.86 wasn't a clean estimate. The same release
-  wrote the bars down: precision with a 95% lower bound and a minimum number of approvals,
-  at least 7 days of shadow, and a shadow runner a test proves can't send.
+- **Oct 9, first release: a scorecard, not an LLM.** A logistic regression on 1,245 of my
+  labeled decisions, split by time 60/20/20. On the newest fifth, held out, it approved 22
+  posts and was right on 19 (0.86, Wilson 95% 0.67 to 0.95), at 10% recall. I had looked
+  at that held-out set three times while fixing the policy, so 0.86 wasn't a clean
+  estimate. The same release wrote the bars down: precision with a 95% lower bound and a
+  minimum number of approvals, at least 7 days of shadow, and a shadow runner a test proves
+  can't send.
 - **Oct 9, later that day: GPT-5.5 decides.** Its first replay, on a stratified sample of
   200 decisions, also scored 0.86 precision, but caught only 75 of my 138 approvals (0.54).
   The two 0.86s come from different samples at different recall, so they aren't a paired
