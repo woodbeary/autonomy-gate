@@ -19,6 +19,7 @@ from typing import Any
 from . import __version__
 from .actuator import Guard, NotEarned
 from .baseline import LogisticBaseline
+from .clocktest import clock_dict, file_sha256, format_clock, measure_clock
 from .golive import check, format_check
 from .killswitch import FileKillSwitch
 from .ledger import Ledger
@@ -175,6 +176,37 @@ def cmd_replay(args: argparse.Namespace) -> int:
             f"everything through {lock.seen_through}."
         )
     return 0 if report.candidate.meets_bars else 1
+
+
+def cmd_clock_test(args: argparse.Namespace) -> int:
+    prices = (args.usd_per_mtok_in, args.usd_per_mtok_out)
+    if (prices[0] is None) != (prices[1] is None):
+        raise UsageError("pass both --usd-per-mtok-in and --usd-per-mtok-out, or neither")
+    records = load_labels(args.labels)
+    if args.sample:
+        records = stratified_sample(records, args.sample, seed=args.seed)
+    agent = load_object(args.candidate)
+    report = measure_clock(
+        agent,
+        records,
+        workers=args.workers,
+        timeout_s=args.timeout,
+        usd_per_mtok=None if prices[0] is None else (prices[0], prices[1]),
+        meta={
+            "candidate": args.candidate,
+            "labels": Path(args.labels).name,
+            "labels_sha256": file_sha256(args.labels),
+            "sample": args.sample,
+            "seed": args.seed if args.sample else None,
+        },
+    )
+    out = clock_dict(report)
+    if args.out:
+        Path(args.out).write_text(json.dumps(out, indent=2, sort_keys=True) + "\n", "utf-8")
+    print(json.dumps(out, indent=2) if args.json else format_clock(report))
+    if args.out and not args.json:
+        print(f"\nWrote {args.out}.")
+    return 0
 
 
 def cmd_retest(args: argparse.Namespace) -> int:
@@ -383,6 +415,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--workers", type=int, default=1)
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_replay)
+
+    s = sub.add_parser(
+        "clock-test", help="ask the same decisions with and without decidedAt; compare"
+    )
+    s.add_argument("labels")
+    agent_opts(s)
+    s.add_argument("--sample", type=int, help="use a stratified sample of this size")
+    s.add_argument("--seed", type=int, default=0)
+    s.add_argument("--workers", type=int, default=1)
+    s.add_argument("--usd-per-mtok-in", type=float, help="input price, USD per million tokens")
+    s.add_argument("--usd-per-mtok-out", type=float, help="output price, USD per million tokens")
+    s.add_argument("--out", help="write the JSON report here")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(func=cmd_clock_test)
 
     s = sub.add_parser("retest", help="score newer decisions once at the frozen threshold")
     s.add_argument("heldout")

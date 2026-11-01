@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from autonomy_gate.adapters.common import VERDICT_SCHEMA
+from autonomy_gate.cli import main
 from autonomy_gate.policy import APPROVE, HOLD, decide
 
 
@@ -40,7 +41,8 @@ class FakeAPI:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 headers = {k.lower(): v for k, v in self.headers.items()}
                 api.seen.append((self.path, headers, body))
-                status, reply = api.replies[self.path]
+                reply = api.replies[self.path]
+                status, reply = reply(body) if callable(reply) else reply
                 data = json.dumps(reply).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -176,3 +178,44 @@ def test_openai_through_the_openai_sdk(offline):
     assert body["text"]["format"]["type"] == "json_schema"
     assert body["text"]["format"]["strict"] is True
     assert agent.usage.snapshot()["reasoning_tokens"] == 32
+
+
+def test_clock_test_runs_end_to_end_through_the_claude_sdk(offline, sets, tmp_path, capsys):
+    sdk("anthropic")
+
+    def answer(body):
+        asked = json.loads(body["messages"][0]["content"])
+        action = "approve" if "decidedAt" in asked else "skip"
+        verdict = {"action": action, "reason": "fake", "confidence": 0.9}
+        return 200, claude_message(json.dumps(verdict))
+
+    labels = tmp_path / "labels.jsonl"
+    labels.write_text(
+        "".join(json.dumps(r.to_dict()) + "\n" for r in sets["history"][:12]), encoding="utf-8"
+    )
+    out = tmp_path / "clock.json"
+    with FakeAPI({"/v1/messages": answer}) as api:
+        offline.setenv("ANTHROPIC_BASE_URL", api.url)
+        offline.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
+        code = main(
+            [
+                "clock-test",
+                str(labels),
+                "--candidate",
+                "autonomy_gate.adapters.anthropic_messages:ClaudeMessagesAgent",
+                "--usd-per-mtok-in",
+                "4",
+                "--usd-per-mtok-out",
+                "20",
+                "--out",
+                str(out),
+            ]
+        )
+    assert code == 0, capsys.readouterr().err
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["meta"]["agent"]["model"] == "claude-opus-5-5"
+    assert report["meta"]["agent"]["effort"] == "low"
+    assert report["arms"]["with_clock"]["usage"]["calls"] == 12
+    assert report["arms"]["without_clock"]["as_answered"]["tp"] == 0
+    assert report["cost_usd"]["total"] == pytest.approx((24 * 150 * 4 + 24 * 40 * 20) / 1e6)
+    assert len(api.seen) == 24

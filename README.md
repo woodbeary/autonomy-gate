@@ -68,7 +68,7 @@ a couch gone before 5pm"). The "person" who decided them is a formula, and the a
 `autonomy_gate.synthetic:candidate`, a keyword-and-noise stand-in for a model. Its numbers
 say nothing about any real model.
 
-**1. Strip the clock, and recall collapses on the same-day requests.**
+**1. Strip the clock, and the stand-in's recall collapses on the same-day requests.**
 
 ```text
 $ autonomy-gate replay examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --bars examples/gate.yaml --strip-clock
@@ -82,7 +82,9 @@ By the agent's reason:
 ```
 
 Precision still looks fine. The stand-in, with no date to go on, calls 138 same-day
-requests expired, and the person had approved 108 of them. Put the clock back:
+requests expired, and the person had approved 108 of them. That collapse is built into the
+stand-in; whether a real model does the same is what `clock-test` (below) measures. Put the
+clock back:
 
 ```text
 $ autonomy-gate replay examples/leads_history.jsonl --candidate autonomy_gate.synthetic:candidate --bars examples/gate.yaml
@@ -344,6 +346,35 @@ and you can use it on your own policy module.
 
 The defaults are the bars the author wrote for his own agent, except `min_recall`, which is
 yours to choose.
+
+## Measuring the clock on a real model
+
+`autonomy-gate clock-test` asks the same decisions twice, once with `decidedAt` in every
+request and once without it, and nothing else different. It compares the model's own
+answers (no threshold, so nothing tuned on one arm favors it), pairs the arms on the
+person's approvals with an exact McNemar test, and splits recall by whether the request
+uses relative time words. The report records the model and effort, the date, how many
+decisions, a hash of the label file, the candidate's fingerprint, and the tokens each arm
+used, priced if you pass prices.
+
+```sh
+pip install -e ".[openai]"
+export OPENAI_API_KEY=... AUTONOMY_GATE_OPENAI_MODEL=gpt-5.5 AUTONOMY_GATE_OPENAI_EFFORT=low
+AUTONOMY_GATE_ALLOW_MODEL_CALLS=1 autonomy-gate clock-test examples/leads_history.jsonl \
+  --candidate autonomy_gate.adapters.openai_responses:OpenAIResponsesAgent \
+  --sample 200 --workers 4 --timeout 60 \
+  --usd-per-mtok-in <input price> --usd-per-mtok-out <output price> \
+  --out reports/clock-gpt-5.5-low.json
+```
+
+The same works with `--candidate autonomy_gate.adapters.anthropic_messages:ClaudeMessagesAgent`
+and `ANTHROPIC_API_KEY`. A sample of 200 is 400 calls. The synthetic "person" is a formula,
+so precision and recall here measure agreement with that formula; the difference between
+the two arms is the part that speaks to the clock.
+
+This repository claims no real-model number. The only figures above come from the
+stand-in. Run it with your key and commit the report; if a real model doesn't lose recall
+without the clock, the report says so.
 
 ## Measuring your own agent
 
