@@ -40,5 +40,14 @@ def test_the_walker_catches_an_indirect_import(tmp_path, monkeypatch):
     sys.modules.pop("leaky", None)
 
 
-def test_the_openai_adapter_is_not_reachable_from_the_package_root():
+def test_no_model_adapter_is_reachable_from_the_package_root():
     assert not any(m.startswith("autonomy_gate.adapters") for m in reachable("autonomy_gate"))
+    assert not any(m in ("openai", "anthropic") for m in reachable("autonomy_gate"))
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["autonomy_gate.adapters.openai_responses", "autonomy_gate.adapters.anthropic_messages"],
+)
+def test_each_adapter_reaches_the_actuator_through_nothing(module):
+    assert_isolated(module, forbidden=(), also=SENDERS[:2])

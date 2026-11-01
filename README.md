@@ -248,8 +248,32 @@ error, so the gate holds. Your own instructions can go in the file named by
 `AUTONOMY_GATE_INSTRUCTIONS_FILE`. It follows OpenAI's
 [Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs)
 and the [Responses API reference](https://developers.openai.com/api/reference/resources/responses/methods/create),
-both read on 2026-10-31. The tests drive it with a fake client; this repository has not
-run it against the live API.
+both read on 2026-10-31.
+
+### Claude (Anthropic Messages API)
+
+With `ANTHROPIC_API_KEY` set (the model defaults to `claude-opus-5-5`; override it with
+`AUTONOMY_GATE_ANTHROPIC_MODEL`, and the effort, which defaults to `low`, with
+`AUTONOMY_GATE_ANTHROPIC_EFFORT`):
+
+```sh
+pip install -e ".[anthropic]"
+AUTONOMY_GATE_ALLOW_MODEL_CALLS=1 autonomy-gate replay labels.jsonl --candidate autonomy_gate.adapters.anthropic_messages:ClaudeMessagesAgent
+```
+
+It puts the verdict schema in `output_config.format` (`type: "json_schema"`) and always
+sends the effort. A `refusal` or `max_tokens` stop reason, or any stop other than
+`end_turn`, raises, so the gate holds. `action` is lowercased before the verdict is
+checked, because structured outputs don't promise an enum's capitalization, and the schema
+carries no numeric bounds (unsupported there), so `Verdict` checks that confidence is in
+[0, 1]. It sends no fallback models: an answer from a model the lock never tested must not
+act. It follows Anthropic's
+[structured outputs guide](https://platform.claude.com/docs/en/build-with-claude/structured-outputs).
+
+Both adapters add every response's token usage, refusals included, to `agent.usage`. The
+tests drive them with fake clients, and `tests/test_adapters_loopback.py` runs each through
+its real SDK against a fake API on 127.0.0.1 with a fake key (a CI job installs both SDKs
+for it). This repository has not called either live API.
 
 ## The runtime in your code
 

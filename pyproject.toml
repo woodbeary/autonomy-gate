@@ -26,6 +26,7 @@ dependencies = []
 
 [project.optional-dependencies]
 openai = ["openai>=1.66"]
+anthropic = ["anthropic>=1,<3"]
 dev = ["pytest>=8", "ruff==0.16.9"]
 
 [project.scripts]

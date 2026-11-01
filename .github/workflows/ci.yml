@@ -32,6 +32,20 @@ jobs:
           AUTONOMY_GATE_REQUIRE_POWERLOSS: "1"
         run: pytest
 
+  adapters:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install with both SDKs
+        run: python -m pip install -e ".[dev,openai,anthropic]"
+      - name: Adapters through the real SDKs, against a fake API on 127.0.0.1
+        env:
+          AUTONOMY_GATE_REQUIRE_SDKS: "1"
+        run: pytest tests/test_adapters_loopback.py tests/test_claude_adapter.py tests/test_openai_adapter.py
+
   secrets:
     runs-on: ubuntu-latest
     steps:
