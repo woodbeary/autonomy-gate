@@ -409,20 +409,25 @@ The synthetic numbers above measure nothing real. To get real ones:
 
 ## What was tested
 
-- `pytest`: 79 tests in `tests/`, all passing locally on Python 3.11, 3.12 and 3.13. The
-  CI workflow runs them on the same three. They cover the Wilson
-  interval against known values, threshold choice, the clock and leakage lint, provenance
-  on every label path (including the committed example files), the clock-stripped replay,
-  the baseline comparison, held-out reuse refusal by id, by content and by time, shadow
-  isolation (no sender parameter, no socket opened, imports walked), the go-live bars,
-  kill switch, cap, skips, a sender that raises or returns no receipt, a real process
-  killed with `os._exit` inside `send()` before and after the write, the OpenAI request
-  shape against a fake client, and the CLI demo end to end.
+- `pytest`: 151 tests in `tests/`, all passing locally on Python 3.11, 3.12 and 3.13 with
+  both SDKs installed and the power-cut simulation required (148 pass and 3 skip where the
+  SDKs aren't installed). The CI workflow runs them on the same three, plus a job with both
+  SDKs. They cover the Wilson interval against known values, threshold choice, the clock
+  and leakage lint, provenance on every label path (including the committed example files
+  and assisted decisions), the clock-stripped replay, the baseline comparison, held-out
+  reuse refusal by id, by content and by time, shadow isolation (no sender parameter, no
+  socket opened, imports walked), the go-live bars, kill switch, cap, skips, a sender that
+  raises or returns no receipt, the sender contract, a real process killed with `os._exit`
+  inside `send()` before and after the write, a simulated power cut after the `sending`
+  commit, both adapters against fake clients and through their real SDKs against a fake API
+  on 127.0.0.1, `clock-test` end to end, every command the README shows, and the CLI demo.
 - `ruff check` and `ruff format --check`: clean.
-- Scanned every tracked file, and every file in every commit, with `detect-secrets` 1.5.0: no findings.
+- Scanned every tracked file, and every file in every commit, with `detect-secrets` 1.5.0:
+  no findings.
 
-Not tested: a real model, a real sender over the network, or several runners sharing one
-ledger (run one runner per ledger).
+Not tested: a real model (no live API was called), a real sender over the network, a power
+cut on real hardware or on macOS (the simulation needs Linux), or several runners sharing
+one ledger (run one runner per ledger).
 
 ## Limits
 

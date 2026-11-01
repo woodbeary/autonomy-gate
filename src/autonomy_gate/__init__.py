@@ -31,7 +31,7 @@ from .replay import ReplayReport, format_report, replay, run_agent
 from .shadow import Shadow, load_shadow
 from .threshold import Bars, choose_threshold
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "Bars",
