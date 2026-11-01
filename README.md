@@ -20,14 +20,30 @@ synthetic data with a stand-in model, so it needs no API key.
 
 ## Why it exists
 
-In October 2026 I had to decide whether the GPT-5.5 lead agent I built for my hauling
-business could act without me. Its first replay, on 200 of my own labeled decisions, scored
-0.86 precision but caught only 54% of the leads I'd have taken. Two causes: the request
-carried no clock, so the model judged "today's sale" against its own idea of today, and its
-rubric was narrower than I am. Before anything was allowed to act, I wrote the bars down: a
-held-out re-test, a week of shadow, a Wilson lower bound on precision, provenance so the
-agent's own approvals never became labels, and a kill switch. This package is that gate,
-rebuilt on synthetic data. None of my business's data is in it.
+In October 2026 I had to decide whether the lead agent I built for my hauling business could
+act without me. In order:
+
+- **Oct 9, first release: a scorecard, not an LLM.** A logistic regression fitted on 1,245
+  of my labeled decisions. On a time-split held-out set it approved 22 posts and was right
+  on 19 (0.86, Wilson 95% 0.67 to 0.95), at 10% recall. I had looked at that held-out set
+  three times while fixing the policy, so 0.86 wasn't a clean estimate. The same release
+  wrote the bars down: precision with a 95% lower bound and a minimum number of approvals,
+  at least 7 days of shadow, and a shadow runner a test proves can't send.
+- **Oct 9, later that day: GPT-5.5 decides.** Its first replay, on a stratified sample of
+  200 decisions, also scored 0.86 precision, but caught only 75 of my 138 approvals (0.54).
+  The two 0.86s come from different samples at different recall, so they aren't a paired
+  comparison. Two causes: the request carried no clock, so the model judged "today's sale"
+  against its own idea of today, and its rubric was narrower than I am. The same change
+  added `decidedAt` and a wider rubric, and that version hasn't been replayed yet.
+- **Oct 11: live approvals behind a kill switch, off by default.** Every decision the agent
+  made carries `decidedBy`, so its approvals never become labels.
+
+Two silent failures in those weeks are why a send here counts only with a receipt. They
+were separate: a scheduled job printed its usage line and exited 0 every minute from Sep 17
+until it was fixed on Oct 9, doing nothing; and from Sep 28 to Oct 2 the health pager's only
+route was the one that was down, so nothing paged about the outage.
+
+This package is that gate, rebuilt on synthetic data. None of my business's data is in it.
 
 — Jacob Lopez
 
@@ -421,11 +437,12 @@ ledger (run one runner per ledger).
   nothing in shadow refers to it. It finds modules with `importlib.util.find_spec`, which
   imports their parent packages, so point it only at code you would import anyway.
 - A timed-out model call keeps running in a background thread; its answer is ignored.
-- `ledger.db` is SQLite in WAL mode with `synchronous=FULL` (and `fullfsync` on macOS), so
-  a committed `sending` row survives a power cut as well as a crash;
-  `tests/test_durability.py` simulates the cut by keeping only what was fsynced. WAL needs a
-  local disk, and the ledger takes one runner. A send and its ledger row still can't be one
-  transaction, which is why a lost answer is settled by lookup.
+- `ledger.db` is SQLite in WAL mode with `synchronous=FULL` (plus `fullfsync` and
+  `checkpoint_fullfsync`, which macOS needs to really flush), so a committed `sending` row
+  survives a power cut as well as a crash; `tests/test_durability.py` simulates the cut by
+  keeping only what was fsynced. WAL needs a local disk, and the ledger takes one runner. A
+  send and its ledger row still can't be one transaction, which is why a lost answer is
+  settled by lookup, and why `send` must be idempotent on `request_id`.
 
 ## License
 
